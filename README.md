@@ -15,15 +15,30 @@ A smart contract implementation on the Stacks blockchain that teaches **compound
 ## 🏗️ Contract Details
 
 ### Default Settings
-- **Interest Rate**: 5% (0.05% per block)
+- **Base Interest Rate**: 5% (0.05% per block)
 - **Minimum Deposit**: 1 STX (1,000,000 microSTX)
 - **Lock Period**: 144 blocks (~24 hours)
 - **Transaction History**: Last 50 transactions per user
 
+### 🎯 Tiered Interest Rates
+**Balance-Based Tiers:**
+- **Tier 0**: 0+ STX → 5% APY (base rate)
+- **Tier 1**: 5+ STX → 7% APY 
+- **Tier 2**: 10+ STX → 10% APY
+- **Tier 3**: 50+ STX → 15% APY
+- **Tier 4**: 100+ STX → 20% APY
+
+**Time-Based Bonuses:**
+- **0-9 days**: 100% (no bonus)
+- **10-29 days**: 110% bonus multiplier
+- **30-99 days**: 125% bonus multiplier
+- **100+ days**: 150% bonus multiplier
+
 ### Interest Calculation
-The contract uses compound interest calculated per block:
+The contract uses tiered compound interest calculated per block:
 - Interest compounds every 144 blocks
-- Formula: `compound_interest = principal * (1 + rate/periods)^periods`
+- **Tiered Rate** = Base Tier Rate × Time Bonus Multiplier
+- Formula: `compound_interest = principal * tiered_rate * periods`
 - Interest can be claimed without affecting principal balance
 
 ## 🚀 Usage
@@ -82,6 +97,21 @@ clarinet deploy --devnet
 (contract-call? .savings-account-with-interest get-user-transactions tx-sender)
 ```
 
+#### Check Your Interest Tier
+```clarity
+(contract-call? .savings-account-with-interest get-user-tier tx-sender)
+```
+
+#### Check Time Bonus Tier
+```clarity
+(contract-call? .savings-account-with-interest get-time-bonus-tier tx-sender)
+```
+
+#### Calculate Your Tiered Rate
+```clarity
+(contract-call? .savings-account-with-interest calculate-tiered-rate tx-sender)
+```
+
 ### 🛠️ Admin Functions (Contract Owner Only)
 
 #### Set Interest Rate
@@ -102,6 +132,21 @@ clarinet deploy --devnet
 #### Toggle Contract Active/Inactive
 ```clarity
 (contract-call? .savings-account-with-interest toggle-contract true)
+```
+
+#### Initialize Tier System
+```clarity
+(contract-call? .savings-account-with-interest initialize-tiers)
+```
+
+#### Set Custom Balance Tier
+```clarity
+(contract-call? .savings-account-with-interest set-balance-tier u5 u200000000 u25)
+```
+
+#### Set Custom Time Bonus
+```clarity
+(contract-call? .savings-account-with-interest set-time-bonus u4 u28800 u200)
 ```
 
 ## 📋 Testing

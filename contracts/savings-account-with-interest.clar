@@ -12,6 +12,16 @@
 (define-data-var total-deposits uint u0)
 (define-data-var contract-active bool true)
 
+(define-map balance-tiers uint {
+    minimum-balance: uint,
+    interest-rate: uint
+})
+
+(define-map time-bonuses uint {
+    minimum-lock-blocks: uint,
+    bonus-multiplier: uint
+})
+
 (define-map user-accounts principal {
     balance: uint,
     last-deposit-block: uint,
@@ -55,6 +65,56 @@
     (var-get contract-active)
 )
 
+(define-read-only (get-balance-tier (tier-id uint))
+    (map-get? balance-tiers tier-id)
+)
+
+(define-read-only (get-time-bonus (bonus-id uint))
+    (map-get? time-bonuses bonus-id)
+)
+
+(define-read-only (get-user-tier (account principal))
+    (let (
+        (account-data (unwrap! (map-get? user-accounts account) (err ERR_ACCOUNT_NOT_FOUND)))
+        (balance (get balance account-data))
+    )
+    (if (>= balance u100000000)
+        (ok u4)
+        (if (>= balance u50000000)
+            (ok u3)
+            (if (>= balance u10000000)
+                (ok u2)
+                (if (>= balance u5000000)
+                    (ok u1)
+                    (ok u0))))))
+)
+
+(define-read-only (get-time-bonus-tier (account principal))
+    (let (
+        (account-data (unwrap! (map-get? user-accounts account) (err ERR_ACCOUNT_NOT_FOUND)))
+        (lock-duration (- stacks-block-height (get last-deposit-block account-data)))
+    )
+    (if (>= lock-duration u14400)
+        (ok u3)
+        (if (>= lock-duration u4320)
+            (ok u2)
+            (if (>= lock-duration u1440)
+                (ok u1)
+                (ok u0)))))
+)
+
+(define-read-only (calculate-tiered-rate (account principal))
+    (let (
+        (user-tier (unwrap-panic (get-user-tier account)))
+        (time-tier (unwrap-panic (get-time-bonus-tier account)))
+        (base-tier-data (default-to {minimum-balance: u0, interest-rate: u5} (map-get? balance-tiers user-tier)))
+        (time-bonus-data (default-to {minimum-lock-blocks: u0, bonus-multiplier: u100} (map-get? time-bonuses time-tier)))
+        (base-rate (get interest-rate base-tier-data))
+        (bonus-multiplier (get bonus-multiplier time-bonus-data))
+    )
+    (ok (/ (* base-rate bonus-multiplier) u100)))
+)
+
 (define-private (calculate-compound-helper (principal-amount uint) (rate uint) (periods uint))
     (if (is-eq periods u0)
         u0
@@ -72,10 +132,10 @@
         (current-balance (get balance account-data))
         (last-deposit (get last-deposit-block account-data))
         (blocks-elapsed (- stacks-block-height last-deposit))
-        (rate (var-get interest-rate))
+        (tiered-rate (unwrap-panic (calculate-tiered-rate account)))
     )
     (if (> blocks-elapsed u0)
-        (ok (/ (* current-balance rate blocks-elapsed) u10000))
+        (ok (/ (* current-balance tiered-rate blocks-elapsed) u10000))
         (ok u0)
     ))
 )
@@ -88,10 +148,10 @@
         (current-balance (get balance account-data))
         (last-deposit (get last-deposit-block account-data))
         (blocks-elapsed (- stacks-block-height last-deposit))
-        (rate (var-get interest-rate))
+        (tiered-rate (unwrap-panic (calculate-tiered-rate account)))
         (compound-periods (/ blocks-elapsed u144))
         (compound-interest (if (> compound-periods u0)
-            (calculate-compound-helper current-balance rate compound-periods)
+            (calculate-compound-helper current-balance tiered-rate compound-periods)
             u0))
     )
     (ok (+ current-balance compound-interest)))
@@ -155,10 +215,10 @@
         (last-deposit (get last-deposit-block account-data))
         (blocks-since-deposit (- stacks-block-height last-deposit))
         (blocks-elapsed (- stacks-block-height last-deposit))
-        (rate (var-get interest-rate))
+        (tiered-rate (unwrap-panic (calculate-tiered-rate withdrawer)))
         (compound-periods (/ blocks-elapsed u144))
         (compound-interest (if (> compound-periods u0)
-            (calculate-compound-helper current-balance rate compound-periods)
+            (calculate-compound-helper current-balance tiered-rate compound-periods)
             u0))
         (total-available (+ current-balance compound-interest))
         (current-transactions (default-to (list) (map-get? user-transactions withdrawer)))
@@ -202,10 +262,10 @@
         (account-data (unwrap! (map-get? user-accounts claimer) ERR_ACCOUNT_NOT_FOUND))
         (last-deposit (get last-deposit-block account-data))
         (blocks-elapsed (- stacks-block-height last-deposit))
-        (rate (var-get interest-rate))
+        (tiered-rate (unwrap-panic (calculate-tiered-rate claimer)))
         (compound-periods (/ blocks-elapsed u144))
         (compound-interest (if (> compound-periods u0)
-            (calculate-compound-helper (get balance account-data) rate compound-periods)
+            (calculate-compound-helper (get balance account-data) tiered-rate compound-periods)
             u0))
         (current-transactions (default-to (list) (map-get? user-transactions claimer)))
     )
@@ -306,3 +366,37 @@
 
 (define-public (get-contract-balance)
     (ok (stx-get-balance (as-contract tx-sender))))
+
+(define-public (set-balance-tier (tier-id uint) (minimum-balance uint) (tier-interest-rate uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (asserts! (<= tier-interest-rate u100) ERR_INVALID_RATE)
+        (map-set balance-tiers tier-id {
+            minimum-balance: minimum-balance,
+            interest-rate: tier-interest-rate
+        })
+        (ok tier-id)))
+
+(define-public (set-time-bonus (bonus-id uint) (minimum-lock-blocks uint) (bonus-multiplier uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (asserts! (> bonus-multiplier u0) ERR_INVALID_RATE)
+        (map-set time-bonuses bonus-id {
+            minimum-lock-blocks: minimum-lock-blocks,
+            bonus-multiplier: bonus-multiplier
+        })
+        (ok bonus-id)))
+
+(define-public (initialize-tiers)
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (try! (set-balance-tier u0 u0 u5))
+        (try! (set-balance-tier u1 u5000000 u7))
+        (try! (set-balance-tier u2 u10000000 u10))
+        (try! (set-balance-tier u3 u50000000 u15))
+        (try! (set-balance-tier u4 u100000000 u20))
+        (try! (set-time-bonus u0 u0 u100))
+        (try! (set-time-bonus u1 u1440 u110))
+        (try! (set-time-bonus u2 u4320 u125))
+        (try! (set-time-bonus u3 u14400 u150))
+        (ok true)))
