@@ -5,6 +5,9 @@
 (define-constant ERR_ACCOUNT_NOT_FOUND (err u103))
 (define-constant ERR_WITHDRAWAL_TOO_EARLY (err u104))
 (define-constant ERR_INVALID_RATE (err u105))
+(define-constant ERR_GOAL_NOT_FOUND (err u106))
+(define-constant ERR_GOAL_LIMIT_REACHED (err u107))
+(define-constant ERR_INVALID_ALLOCATION (err u108))
 
 (define-data-var interest-rate uint u5)
 (define-data-var minimum-deposit uint u1000000)
@@ -21,6 +24,18 @@
     minimum-lock-blocks: uint,
     bonus-multiplier: uint
 })
+
+(define-map user-goals {user: principal, goal-id: uint} {
+    goal-name: (string-ascii 50),
+    target-amount: uint,
+    allocated-amount: uint,
+    target-block: uint,
+    created-block: uint,
+    completed: bool,
+    priority: uint
+})
+
+(define-map user-goal-count principal uint)
 
 (define-map user-accounts principal {
     balance: uint,
@@ -113,6 +128,48 @@
         (bonus-multiplier (get bonus-multiplier time-bonus-data))
     )
     (ok (/ (* base-rate bonus-multiplier) u100)))
+)
+
+(define-read-only (get-user-goal (user principal) (goal-id uint))
+    (map-get? user-goals {user: user, goal-id: goal-id})
+)
+
+(define-read-only (get-user-goal-count (user principal))
+    (default-to u0 (map-get? user-goal-count user))
+)
+
+(define-read-only (get-goal-progress (user principal) (goal-id uint))
+    (let (
+        (goal-data (unwrap! (map-get? user-goals {user: user, goal-id: goal-id}) (err ERR_GOAL_NOT_FOUND)))
+        (target (get target-amount goal-data))
+        (allocated (get allocated-amount goal-data))
+        (progress-percentage (if (> target u0) (/ (* allocated u100) target) u0))
+    )
+    (ok {
+        target-amount: target,
+        allocated-amount: allocated,
+        remaining-amount: (- target allocated),
+        progress-percentage: progress-percentage,
+        is-completed: (>= allocated target)
+    }))
+)
+
+(define-read-only (get-total-allocated (user principal))
+    (let (
+        (goal-count (get-user-goal-count user))
+    )
+    (ok (fold calculate-total-allocated-helper (list u0 u1 u2 u3 u4 u5 u6 u7 u8 u9) {user: user, total: u0})))
+)
+
+(define-private (calculate-total-allocated-helper (goal-id uint) (acc {user: principal, total: uint}))
+    (let (
+        (user (get user acc))
+        (current-total (get total acc))
+        (goal-data (map-get? user-goals {user: user, goal-id: goal-id}))
+    )
+    (match goal-data
+        goal-info {user: user, total: (+ current-total (get allocated-amount goal-info))}
+        {user: user, total: current-total}))
 )
 
 (define-private (calculate-compound-helper (principal-amount uint) (rate uint) (periods uint))
@@ -400,3 +457,126 @@
         (try! (set-time-bonus u2 u4320 u125))
         (try! (set-time-bonus u3 u14400 u150))
         (ok true)))
+
+(define-public (create-goal (goal-name (string-ascii 50)) (target-amount uint) (target-block uint) (priority uint))
+    (let (
+        (user tx-sender)
+        (current-count (get-user-goal-count user))
+        (goal-id current-count)
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (< current-count u10) ERR_GOAL_LIMIT_REACHED)
+    (asserts! (> target-amount u0) ERR_INVALID_AMOUNT)
+    (asserts! (> target-block stacks-block-height) ERR_INVALID_AMOUNT)
+    
+    (map-set user-goals {user: user, goal-id: goal-id} {
+        goal-name: goal-name,
+        target-amount: target-amount,
+        allocated-amount: u0,
+        target-block: target-block,
+        created-block: stacks-block-height,
+        completed: false,
+        priority: priority
+    })
+    
+    (map-set user-goal-count user (+ current-count u1))
+    (ok goal-id)))
+
+(define-public (allocate-to-goal (goal-id uint) (amount uint))
+    (let (
+        (user tx-sender)
+        (account-data (unwrap! (map-get? user-accounts user) ERR_ACCOUNT_NOT_FOUND))
+        (goal-data (unwrap! (map-get? user-goals {user: user, goal-id: goal-id}) ERR_GOAL_NOT_FOUND))
+        (current-balance (get balance account-data))
+        (current-allocated (get allocated-amount goal-data))
+        (total-allocated-result (unwrap-panic (get-total-allocated user)))
+        (total-allocated (get total total-allocated-result))
+        (available-balance (- current-balance total-allocated))
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (> amount u0) ERR_INVALID_AMOUNT)
+    (asserts! (>= available-balance amount) ERR_INSUFFICIENT_BALANCE)
+    (asserts! (not (get completed goal-data)) ERR_INVALID_ALLOCATION)
+    
+    (let (
+        (new-allocated (+ current-allocated amount))
+        (target-amount (get target-amount goal-data))
+        (is-completed (>= new-allocated target-amount))
+    )
+    
+    (map-set user-goals {user: user, goal-id: goal-id} {
+        goal-name: (get goal-name goal-data),
+        target-amount: target-amount,
+        allocated-amount: new-allocated,
+        target-block: (get target-block goal-data),
+        created-block: (get created-block goal-data),
+        completed: is-completed,
+        priority: (get priority goal-data)
+    })
+    
+    (ok {allocated: amount, new-total: new-allocated, completed: is-completed}))))
+
+(define-public (deallocate-from-goal (goal-id uint) (amount uint))
+    (let (
+        (user tx-sender)
+        (goal-data (unwrap! (map-get? user-goals {user: user, goal-id: goal-id}) ERR_GOAL_NOT_FOUND))
+        (current-allocated (get allocated-amount goal-data))
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (> amount u0) ERR_INVALID_AMOUNT)
+    (asserts! (>= current-allocated amount) ERR_INSUFFICIENT_BALANCE)
+    
+    (let (
+        (new-allocated (- current-allocated amount))
+        (target-amount (get target-amount goal-data))
+    )
+    
+    (map-set user-goals {user: user, goal-id: goal-id} {
+        goal-name: (get goal-name goal-data),
+        target-amount: target-amount,
+        allocated-amount: new-allocated,
+        target-block: (get target-block goal-data),
+        created-block: (get created-block goal-data),
+        completed: false,
+        priority: (get priority goal-data)
+    })
+    
+    (ok {deallocated: amount, new-total: new-allocated}))))
+
+(define-public (delete-goal (goal-id uint))
+    (let (
+        (user tx-sender)
+        (goal-data (unwrap! (map-get? user-goals {user: user, goal-id: goal-id}) ERR_GOAL_NOT_FOUND))
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (is-eq (get allocated-amount goal-data) u0) ERR_INVALID_ALLOCATION)
+    
+    (map-delete user-goals {user: user, goal-id: goal-id})
+    (ok true)))
+
+(define-public (update-goal (goal-id uint) (new-target-amount uint) (new-target-block uint) (new-priority uint))
+    (let (
+        (user tx-sender)
+        (goal-data (unwrap! (map-get? user-goals {user: user, goal-id: goal-id}) ERR_GOAL_NOT_FOUND))
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (> new-target-amount u0) ERR_INVALID_AMOUNT)
+    (asserts! (> new-target-block stacks-block-height) ERR_INVALID_AMOUNT)
+    (asserts! (not (get completed goal-data)) ERR_INVALID_ALLOCATION)
+    
+    (let (
+        (current-allocated (get allocated-amount goal-data))
+        (is-completed (>= current-allocated new-target-amount))
+    )
+    
+    (map-set user-goals {user: user, goal-id: goal-id} {
+        goal-name: (get goal-name goal-data),
+        target-amount: new-target-amount,
+        allocated-amount: current-allocated,
+        target-block: new-target-block,
+        created-block: (get created-block goal-data),
+        completed: is-completed,
+        priority: new-priority
+    })
+    
+    (ok {updated: true, completed: is-completed}))))

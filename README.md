@@ -11,6 +11,7 @@ A smart contract implementation on the Stacks blockchain that teaches **compound
 - **🚨 Emergency Withdrawal**: Access funds early with penalty
 - **📊 Transaction History**: Track all deposits, withdrawals, and interest earned
 - **👤 Account Management**: View account info and calculate potential earnings
+- **🎯 Goal-Based Savings**: Create and track multiple savings goals with progress monitoring
 
 ## 🏗️ Contract Details
 
@@ -112,6 +113,43 @@ clarinet deploy --devnet
 (contract-call? .savings-account-with-interest calculate-tiered-rate tx-sender)
 ```
 
+### 🎯 Goal Management Functions
+
+#### Create Savings Goal
+```clarity
+(contract-call? .savings-account-with-interest create-goal "Emergency Fund" u50000000 u172800 u1)
+```
+
+#### Allocate Funds to Goal
+```clarity
+(contract-call? .savings-account-with-interest allocate-to-goal u0 u10000000)
+```
+
+#### Check Goal Progress
+```clarity
+(contract-call? .savings-account-with-interest get-goal-progress tx-sender u0)
+```
+
+#### View Your Goals
+```clarity
+(contract-call? .savings-account-with-interest get-user-goal tx-sender u0)
+```
+
+#### Update Goal Details
+```clarity
+(contract-call? .savings-account-with-interest update-goal u0 u75000000 u259200 u2)
+```
+
+#### Remove Funds from Goal
+```clarity
+(contract-call? .savings-account-with-interest deallocate-from-goal u0 u5000000)
+```
+
+#### Delete Completed Goal
+```clarity
+(contract-call? .savings-account-with-interest delete-goal u0)
+```
+
 ### 🛠️ Admin Functions (Contract Owner Only)
 
 #### Set Interest Rate
@@ -165,6 +203,8 @@ This contract teaches:
 4. **Access control** patterns
 5. **Error handling** in Clarity
 6. **Event tracking** through transaction history
+7. **Goal-oriented financial planning** and progress tracking
+8. **Fund allocation** and resource management
 
 ## 🔐 Security Features
 
@@ -182,15 +222,19 @@ This contract teaches:
 - `u103`: Account not found
 - `u104`: Withdrawal too early
 - `u105`: Invalid interest rate
+- `u106`: Goal not found
+- `u107`: Goal limit reached (max 10 goals)
+- `u108`: Invalid allocation amount
 
 ## 🎨 Example Workflow
 
 1. **🏦 Open Account**: Make your first deposit (minimum 1 STX)
-2. **⏰ Wait**: Let time pass for interest to accumulate
-3. **💰 Earn**: Interest compounds automatically every 144 blocks
-4. **📈 Check**: Monitor your growing balance
-5. **💸 Withdraw**: Access your funds + interest after lock period
-6. **🔄 Repeat**: Continue the cycle to maximize compound returns
+2. **🎯 Set Goals**: Create savings goals like "Emergency Fund" or "Vacation"
+3. **💰 Allocate**: Assign portions of your balance toward specific goals
+4. **⏰ Wait**: Let time pass for interest to accumulate
+5. **📈 Track**: Monitor goal progress and interest growth
+6. **💸 Achieve**: Complete goals and withdraw funds + interest
+7. **🔄 Repeat**: Create new goals and continue building wealth
 
 ## 🤝 Contributing
 
