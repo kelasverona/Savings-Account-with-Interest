@@ -12,6 +12,7 @@ A smart contract implementation on the Stacks blockchain that teaches **compound
 - **📊 Transaction History**: Track all deposits, withdrawals, and interest earned
 - **👤 Account Management**: View account info and calculate potential earnings
 - **🎯 Goal-Based Savings**: Create and track multiple savings goals with progress monitoring
+- **🤝 Referral & Rewards**: Earn bonuses by referring new users with tiered multipliers
 
 ## 🏗️ Contract Details
 
@@ -34,6 +35,18 @@ A smart contract implementation on the Stacks blockchain that teaches **compound
 - **10-29 days**: 110% bonus multiplier
 - **30-99 days**: 125% bonus multiplier
 - **100+ days**: 150% bonus multiplier
+
+### 🤝 Referral System
+**Referral Bonuses:**
+- **Referrer Reward**: 2% of referred user's first deposit
+- **Referee Bonus**: 1% welcome bonus on first deposit
+
+**Referral Tiers (Bonus Multipliers):**
+- **Tier 0**: 0+ referrals → 100% (base bonus)
+- **Tier 1**: 5+ referrals → 125% multiplier
+- **Tier 2**: 10+ referrals → 150% multiplier
+- **Tier 3**: 50+ referrals → 200% multiplier
+- **Tier 4**: 100+ referrals → 300% multiplier
 
 ### Interest Calculation
 The contract uses tiered compound interest calculated per block:
@@ -150,6 +163,33 @@ clarinet deploy --devnet
 (contract-call? .savings-account-with-interest delete-goal u0)
 ```
 
+### 🤝 Referral Functions
+
+#### Set Your Referrer
+```clarity
+(contract-call? .savings-account-with-interest set-referrer 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5)
+```
+
+#### View Referral Info
+```clarity
+(contract-call? .savings-account-with-interest get-referral-info tx-sender)
+```
+
+#### Check Referral Tier
+```clarity
+(contract-call? .savings-account-with-interest calculate-referral-tier tx-sender)
+```
+
+#### Claim Referral Bonuses
+```clarity
+(contract-call? .savings-account-with-interest claim-referral-bonus)
+```
+
+#### Process Referral Rewards
+```clarity
+(contract-call? .savings-account-with-interest process-referral-rewards tx-sender u10000000)
+```
+
 ### 🛠️ Admin Functions (Contract Owner Only)
 
 #### Set Interest Rate
@@ -187,6 +227,21 @@ clarinet deploy --devnet
 (contract-call? .savings-account-with-interest set-time-bonus u4 u28800 u200)
 ```
 
+#### Initialize Referral Tiers
+```clarity
+(contract-call? .savings-account-with-interest initialize-referral-tiers)
+```
+
+#### Set Referral Bonus Rates
+```clarity
+(contract-call? .savings-account-with-interest set-referral-rates u300 u150)
+```
+
+#### Configure Referral Tier
+```clarity
+(contract-call? .savings-account-with-interest set-referral-tier u5 u500 u500)
+```
+
 ## 📋 Testing
 
 Run the test suite:
@@ -205,6 +260,8 @@ This contract teaches:
 6. **Event tracking** through transaction history
 7. **Goal-oriented financial planning** and progress tracking
 8. **Fund allocation** and resource management
+9. **Referral systems** with tiered rewards
+10. **Viral growth mechanics** and network effects
 
 ## 🔐 Security Features
 
@@ -225,16 +282,21 @@ This contract teaches:
 - `u106`: Goal not found
 - `u107`: Goal limit reached (max 10 goals)
 - `u108`: Invalid allocation amount
+- `u109`: Invalid referrer
+- `u110`: Already has referrer
+- `u111`: Self-referral not allowed
 
 ## 🎨 Example Workflow
 
-1. **🏦 Open Account**: Make your first deposit (minimum 1 STX)
-2. **🎯 Set Goals**: Create savings goals like "Emergency Fund" or "Vacation"
-3. **💰 Allocate**: Assign portions of your balance toward specific goals
-4. **⏰ Wait**: Let time pass for interest to accumulate
-5. **📈 Track**: Monitor goal progress and interest growth
-6. **💸 Achieve**: Complete goals and withdraw funds + interest
-7. **🔄 Repeat**: Create new goals and continue building wealth
+1. **🤝 Get Referred**: Use a friend's referral link for welcome bonus
+2. **🏦 Open Account**: Make your first deposit (minimum 1 STX)
+3. **🎯 Set Goals**: Create savings goals like "Emergency Fund" or "Vacation"
+4. **💰 Allocate**: Assign portions of your balance toward specific goals
+5. **📢 Refer Others**: Share your referral link to earn bonus rewards
+6. **⏰ Wait**: Let time pass for interest to accumulate
+7. **📈 Track**: Monitor goal progress, referrals, and interest growth
+8. **💸 Achieve**: Complete goals and withdraw funds + interest + bonuses
+9. **🔄 Repeat**: Create new goals and continue building wealth
 
 ## 🤝 Contributing
 

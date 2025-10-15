@@ -8,12 +8,17 @@
 (define-constant ERR_GOAL_NOT_FOUND (err u106))
 (define-constant ERR_GOAL_LIMIT_REACHED (err u107))
 (define-constant ERR_INVALID_ALLOCATION (err u108))
+(define-constant ERR_INVALID_REFERRER (err u109))
+(define-constant ERR_ALREADY_HAS_REFERRER (err u110))
+(define-constant ERR_SELF_REFERRAL (err u111))
 
 (define-data-var interest-rate uint u5)
 (define-data-var minimum-deposit uint u1000000)
 (define-data-var lock-period uint u144)
 (define-data-var total-deposits uint u0)
 (define-data-var contract-active bool true)
+(define-data-var referral-bonus-rate uint u200)
+(define-data-var referee-bonus-rate uint u100)
 
 (define-map balance-tiers uint {
     minimum-balance: uint,
@@ -36,6 +41,18 @@
 })
 
 (define-map user-goal-count principal uint)
+
+(define-map referral-info principal {
+    referrer: (optional principal),
+    referral-count: uint,
+    total-referral-bonus: uint,
+    referral-tier: uint
+})
+
+(define-map referral-tiers uint {
+    min-referrals: uint,
+    bonus-multiplier: uint
+})
 
 (define-map user-accounts principal {
     balance: uint,
@@ -159,6 +176,35 @@
         (goal-count (get-user-goal-count user))
     )
     (ok (fold calculate-total-allocated-helper (list u0 u1 u2 u3 u4 u5 u6 u7 u8 u9) {user: user, total: u0})))
+)
+
+(define-read-only (get-referral-info (user principal))
+    (default-to {referrer: none, referral-count: u0, total-referral-bonus: u0, referral-tier: u0} 
+        (map-get? referral-info user))
+)
+
+(define-read-only (get-referral-tier (tier-id uint))
+    (map-get? referral-tiers tier-id)
+)
+
+(define-read-only (get-referral-bonus-rates)
+    (ok {referrer-rate: (var-get referral-bonus-rate), referee-rate: (var-get referee-bonus-rate)})
+)
+
+(define-read-only (calculate-referral-tier (user principal))
+    (let (
+        (ref-info (get-referral-info user))
+        (ref-count (get referral-count ref-info))
+    )
+    (if (>= ref-count u100)
+        (ok u4)
+        (if (>= ref-count u50)
+            (ok u3)
+            (if (>= ref-count u10)
+                (ok u2)
+                (if (>= ref-count u5)
+                    (ok u1)
+                    (ok u0))))))
 )
 
 (define-private (calculate-total-allocated-helper (goal-id uint) (acc {user: principal, total: uint}))
@@ -580,3 +626,108 @@
     })
     
     (ok {updated: true, completed: is-completed}))))
+
+(define-public (set-referrer (referrer-address principal))
+    (let (
+        (user tx-sender)
+        (user-ref-info (get-referral-info user))
+        (referrer-account (map-get? user-accounts referrer-address))
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (is-none (get referrer user-ref-info)) ERR_ALREADY_HAS_REFERRER)
+    (asserts! (not (is-eq user referrer-address)) ERR_SELF_REFERRAL)
+    (asserts! (is-some referrer-account) ERR_INVALID_REFERRER)
+    
+    (map-set referral-info user {
+        referrer: (some referrer-address),
+        referral-count: u0,
+        total-referral-bonus: u0,
+        referral-tier: u0
+    })
+    
+    (ok referrer-address)))
+
+(define-public (claim-referral-bonus)
+    (let (
+        (user tx-sender)
+        (ref-info (get-referral-info user))
+        (bonus-amount (get total-referral-bonus ref-info))
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (> bonus-amount u0) ERR_INVALID_AMOUNT)
+    
+    (try! (as-contract (stx-transfer? bonus-amount tx-sender user)))
+    
+    (map-set referral-info user {
+        referrer: (get referrer ref-info),
+        referral-count: (get referral-count ref-info),
+        total-referral-bonus: u0,
+        referral-tier: (get referral-tier ref-info)
+    })
+    
+    (ok bonus-amount)))
+
+(define-public (process-referral-rewards (referee principal) (deposit-amount uint))
+    (let (
+        (referee-info (get-referral-info referee))
+        (referrer-opt (get referrer referee-info))
+    )
+    (match referrer-opt
+        referrer-address
+            (let (
+                (referrer-info (get-referral-info referrer-address))
+                (new-ref-count (+ (get referral-count referrer-info) u1))
+                (new-tier (unwrap-panic (calculate-referral-tier referrer-address)))
+                (tier-data (default-to {min-referrals: u0, bonus-multiplier: u100} (map-get? referral-tiers new-tier)))
+                (tier-multiplier (get bonus-multiplier tier-data))
+                (base-referrer-bonus (/ (* deposit-amount (var-get referral-bonus-rate)) u10000))
+                (referrer-bonus (/ (* base-referrer-bonus tier-multiplier) u100))
+                (referee-bonus (/ (* deposit-amount (var-get referee-bonus-rate)) u10000))
+            )
+            
+            (map-set referral-info referrer-address {
+                referrer: (get referrer referrer-info),
+                referral-count: new-ref-count,
+                total-referral-bonus: (+ (get total-referral-bonus referrer-info) referrer-bonus),
+                referral-tier: new-tier
+            })
+            
+            (map-set referral-info referee {
+                referrer: (some referrer-address),
+                referral-count: (get referral-count referee-info),
+                total-referral-bonus: (+ (get total-referral-bonus referee-info) referee-bonus),
+                referral-tier: (get referral-tier referee-info)
+            })
+            
+            (ok {referrer-bonus: referrer-bonus, referee-bonus: referee-bonus}))
+        (ok {referrer-bonus: u0, referee-bonus: u0})))
+)
+
+(define-public (set-referral-rates (referrer-rate uint) (referee-rate uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (asserts! (<= referrer-rate u1000) ERR_INVALID_RATE)
+        (asserts! (<= referee-rate u1000) ERR_INVALID_RATE)
+        (var-set referral-bonus-rate referrer-rate)
+        (var-set referee-bonus-rate referee-rate)
+        (ok {referrer-rate: referrer-rate, referee-rate: referee-rate})))
+
+(define-public (set-referral-tier (tier-id uint) (min-referrals uint) (multiplier uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (asserts! (> multiplier u0) ERR_INVALID_RATE)
+        (map-set referral-tiers tier-id {
+            min-referrals: min-referrals,
+            bonus-multiplier: multiplier
+        })
+        (ok tier-id)))
+
+(define-public (initialize-referral-tiers)
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (try! (set-referral-tier u0 u0 u100))
+        (try! (set-referral-tier u1 u5 u125))
+        (try! (set-referral-tier u2 u10 u150))
+        (try! (set-referral-tier u3 u50 u200))
+        (try! (set-referral-tier u4 u100 u300))
+        (ok true)))
