@@ -54,6 +54,11 @@
     bonus-multiplier: uint
 })
 
+(define-map beneficiary-settings principal {
+    beneficiary: principal,
+    unlock-block: uint
+})
+
 (define-map user-accounts principal {
     balance: uint,
     last-deposit-block: uint,
@@ -731,3 +736,71 @@
         (try! (set-referral-tier u3 u50 u200))
         (try! (set-referral-tier u4 u100 u300))
         (ok true)))
+
+(define-public (set-beneficiary (beneficiary principal) (unlock-block uint))
+    (let (
+        (user tx-sender)
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (> unlock-block stacks-block-height) ERR_INVALID_AMOUNT)
+    (map-set beneficiary-settings user {
+        beneficiary: beneficiary,
+        unlock-block: unlock-block
+    })
+    (ok {beneficiary: beneficiary, unlock-block: unlock-block})))
+
+(define-public (revoke-beneficiary)
+    (let (
+        (user tx-sender)
+    )
+    (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (map-delete beneficiary-settings user)
+    (ok true)))
+
+(define-public (claim-as-beneficiary (account principal))
+    (let (
+        (caller tx-sender)
+        (setting (unwrap! (map-get? beneficiary-settings account) ERR_ACCOUNT_NOT_FOUND))
+        (beneficiary (get beneficiary setting))
+        (unlock (get unlock-block setting))
+        (account-data (unwrap! (map-get? user-accounts account) ERR_ACCOUNT_NOT_FOUND))
+        (current-balance (get balance account-data))
+        (last-deposit (get last-deposit-block account-data))
+        (blocks-elapsed (- stacks-block-height last-deposit))
+        (tiered-rate (unwrap-panic (calculate-tiered-rate account)))
+        (compound-periods (/ blocks-elapsed u144))
+        (compound-interest (if (> compound-periods u0)
+            (calculate-compound-helper current-balance tiered-rate compound-periods)
+            u0))
+        (total-available (+ current-balance compound-interest))
+        (current-transactions (default-to (list) (map-get? user-transactions account)))
+    )
+    (begin
+        (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+        (asserts! (is-eq caller beneficiary) ERR_UNAUTHORIZED)
+        (asserts! (>= stacks-block-height unlock) ERR_WITHDRAWAL_TOO_EARLY)
+        (asserts! (> total-available u0) ERR_INSUFFICIENT_BALANCE)
+        (try! (as-contract (stx-transfer? total-available tx-sender beneficiary)))
+        (let (
+            (new-total-interest (+ (get total-interest-earned account-data) compound-interest))
+            (new-transaction {
+            transaction-type: "bequest",
+                amount: total-available,
+                stacks-block-height: stacks-block-height,
+                interest-earned: compound-interest
+            })
+            (updated-transactions (unwrap! (as-max-len? (append current-transactions new-transaction) u50) ERR_INVALID_AMOUNT))
+        )
+        (map-set user-accounts account {
+            balance: u0,
+            last-deposit-block: stacks-block-height,
+            total-deposited: (get total-deposited account-data),
+            total-interest-earned: new-total-interest,
+            account-created-block: (get account-created-block account-data)
+        })
+        (map-set user-transactions account updated-transactions)
+        (map-delete beneficiary-settings account)
+        (var-set total-deposits (- (var-get total-deposits) current-balance))
+        (ok {claimed: total-available})
+    ))))
+ 
