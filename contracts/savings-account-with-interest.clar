@@ -54,6 +54,8 @@
     bonus-multiplier: uint
 })
 
+(define-map frozen-accounts principal bool)
+
 (define-map beneficiary-settings principal {
     beneficiary: principal,
     unlock-block: uint
@@ -100,6 +102,10 @@
 
 (define-read-only (get-contract-status)
     (var-get contract-active)
+)
+
+(define-read-only (get-account-frozen (account principal))
+    (default-to false (map-get? frozen-accounts account))
 )
 
 (define-read-only (get-balance-tier (tier-id uint))
@@ -284,8 +290,10 @@
             {balance: u0, last-deposit-block: u0, total-deposited: u0, total-interest-earned: u0, account-created-block: stacks-block-height}
             (map-get? user-accounts depositor)))
         (current-transactions (default-to (list) (map-get? user-transactions depositor)))
+        (is-frozen (default-to false (map-get? frozen-accounts depositor)))
     )
     (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (not is-frozen) ERR_UNAUTHORIZED)
     (asserts! (>= amount (var-get minimum-deposit)) ERR_INVALID_AMOUNT)
     
     (try! (stx-transfer? amount depositor (as-contract tx-sender)))
@@ -330,9 +338,11 @@
             u0))
         (total-available (+ current-balance compound-interest))
         (current-transactions (default-to (list) (map-get? user-transactions withdrawer)))
+        (is-frozen (default-to false (map-get? frozen-accounts withdrawer)))
     )
     
     (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (not is-frozen) ERR_UNAUTHORIZED)
     (asserts! (> amount u0) ERR_INVALID_AMOUNT)
     (asserts! (>= total-available amount) ERR_INSUFFICIENT_BALANCE)
     (asserts! (>= blocks-since-deposit (var-get lock-period)) ERR_WITHDRAWAL_TOO_EARLY)
@@ -376,9 +386,11 @@
             (calculate-compound-helper (get balance account-data) tiered-rate compound-periods)
             u0))
         (current-transactions (default-to (list) (map-get? user-transactions claimer)))
+        (is-frozen (default-to false (map-get? frozen-accounts claimer)))
     )
     
     (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (not is-frozen) ERR_UNAUTHORIZED)
     (asserts! (> compound-interest u0) ERR_INVALID_AMOUNT)
     
     (try! (as-contract (stx-transfer? compound-interest tx-sender claimer)))
@@ -415,9 +427,11 @@
         (penalty-amount (/ current-balance u10))
         (withdrawal-amount (- current-balance penalty-amount))
         (current-transactions (default-to (list) (map-get? user-transactions withdrawer)))
+        (is-frozen (default-to false (map-get? frozen-accounts withdrawer)))
     )
     
     (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+    (asserts! (not is-frozen) ERR_UNAUTHORIZED)
     (asserts! (> current-balance u0) ERR_INSUFFICIENT_BALANCE)
     
     (try! (as-contract (stx-transfer? withdrawal-amount tx-sender withdrawer)))
@@ -484,6 +498,12 @@
             interest-rate: tier-interest-rate
         })
         (ok tier-id)))
+
+(define-public (set-account-freeze (account principal) (frozen bool))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (map-set frozen-accounts account frozen)
+        (ok frozen)))
 
 (define-public (set-time-bonus (bonus-id uint) (minimum-lock-blocks uint) (bonus-multiplier uint))
     (begin
@@ -774,9 +794,11 @@
             u0))
         (total-available (+ current-balance compound-interest))
         (current-transactions (default-to (list) (map-get? user-transactions account)))
+        (account-frozen (default-to false (map-get? frozen-accounts account)))
     )
     (begin
         (asserts! (var-get contract-active) ERR_UNAUTHORIZED)
+        (asserts! (not account-frozen) ERR_UNAUTHORIZED)
         (asserts! (is-eq caller beneficiary) ERR_UNAUTHORIZED)
         (asserts! (>= stacks-block-height unlock) ERR_WITHDRAWAL_TOO_EARLY)
         (asserts! (> total-available u0) ERR_INSUFFICIENT_BALANCE)
